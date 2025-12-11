@@ -31,6 +31,10 @@ func main() {
 	var parent string
 	var body string
 	var labels string
+	var find string
+	var replace string
+	var cql string
+	var limit int = 25 // default limit for search/list
 
 	// jira
 	var projKey string
@@ -83,6 +87,18 @@ func main() {
 		}
 		if argsWithoutProg[a] == "--labels" {
 			labels = argsWithoutProg[a+1]
+		}
+		if argsWithoutProg[a] == "--find" {
+			find = argsWithoutProg[a+1]
+		}
+		if argsWithoutProg[a] == "--replace" {
+			replace = argsWithoutProg[a+1]
+		}
+		if argsWithoutProg[a] == "--cql" {
+			cql = argsWithoutProg[a+1]
+		}
+		if argsWithoutProg[a] == "--limit" {
+			fmt.Sscanf(argsWithoutProg[a+1], "%d", &limit)
 		}
 
 		// jira
@@ -158,6 +174,70 @@ func main() {
 			log.Printf("Added labels '%s' to page '%s'", labels, page.Id)
 		case "addComment":
 			pageService.AddFooterCommentToPage(url, anmaToken, pageId, body)
+		case "updatePage":
+			// Find and replace text in a page
+			if pageId == "" {
+				log.Println("Error: --id is required for updatePage")
+				return
+			}
+			if find == "" {
+				log.Println("Error: --find is required for updatePage")
+				return
+			}
+			updated := pageService.UpdatePage(url, anmaToken, pageId, find, replace)
+			printPage(updated)
+		case "setPageBody":
+			// Set the entire body of a page
+			if pageId == "" {
+				log.Println("Error: --id is required for setPageBody")
+				return
+			}
+			if body == "" {
+				log.Println("Error: --body is required for setPageBody (use empty quotes to clear page)")
+				return
+			}
+			updated := pageService.SetPageBody(url, anmaToken, pageId, body, pageTitle)
+			printPage(updated)
+		case "search":
+			// Search using CQL
+			if cql == "" {
+				log.Println("Error: --cql is required for search")
+				return
+			}
+			results := pageService.SearchCQL(url, anmaToken, cql, limit)
+			printSearchResults(results)
+		case "listPages":
+			// List all pages in a space
+			if spaceKey == "" {
+				log.Println("Error: --space is required for listPages")
+				return
+			}
+			pages := pageService.GetSpacePages(url, anmaToken, spaceKey)
+			printSearchResults(pages)
+		case "deletePage":
+			// Delete a page (permanent - use archivePage instead if possible)
+			if pageId == "" {
+				log.Println("Error: --id is required for deletePage")
+				return
+			}
+			success, response := pageService.DeletePage(url, anmaToken, pageId)
+			if success {
+				log.Printf("Deleted page %s successfully (%s)", pageId, response)
+			} else {
+				log.Printf("Failed to delete page %s: %s", pageId, response)
+			}
+		case "archivePage":
+			// Archive a page (safer - can be restored)
+			if pageId == "" {
+				log.Println("Error: --id is required for archivePage")
+				return
+			}
+			success, response := pageService.ArchivePage(url, anmaToken, pageId)
+			if success {
+				log.Printf("Archived page %s successfully", pageId)
+			} else {
+				log.Printf("Failed to archive page %s: %s", pageId, response)
+			}
 		}
 
 	// Jira instance
@@ -196,4 +276,13 @@ func printPage(page models.Content) {
 	log.Println("============ Content =============")
 	log.Printf("\nType: %s\nTitle: %s\nSpace: %s\n \u001b[33mBody: %s\u001b[0m]",
 		page.Type, page.Title, page.Space.Name, page.Body.Storage.Value)
+}
+
+func printSearchResults(results models.ContentArray) {
+	log.Println("============ Search Results =============")
+	log.Printf("Found %d results\n", len(results.Results))
+	for i, page := range results.Results {
+		log.Printf("%d. [%s] %s (ID: %s, Space: %s)\n",
+			i+1, page.Type, page.Title, page.Id, page.Space.Key)
+	}
 }

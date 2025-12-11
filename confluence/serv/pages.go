@@ -12,6 +12,7 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -324,20 +325,81 @@ func (s PageService) DeletePageLabels(url string, tok string, id string, labels 
 	return "no labels provided"
 }
 
-func (s PageService) DeletePage(url string, tok string, id string) models.Content {
-	reqUrl := fmt.Sprintf("%s/rest/api/content/%s", url, id) //limit=300
+// DeletePage deletes a page permanently (returns success bool and status message)
+// Note: Confluence returns HTTP 204 No Content on success (empty body)
+func (s PageService) DeletePage(baseUrl string, tok string, id string) (bool, string) {
+	log.Printf("Deleting page %s", id)
+	client := myClient()
+	reqUrl := fmt.Sprintf("%s/rest/api/content/%s", baseUrl, id)
+
 	req, err := http.NewRequest("DELETE", reqUrl, nil)
 	req.Header.Add("Authorization", "Basic "+tok)
-	client := myClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Panicln(err)
 	}
 	defer resp.Body.Close()
-	var cnt models.Content
-	bts, err := ioutil.ReadAll(resp.Body)
-	err = json.Unmarshal(bts, &cnt)
-	return cnt
+
+	// Read response body (may be empty on success)
+	bts, _ := io.ReadAll(resp.Body)
+	responseStr := string(bts)
+
+	// HTTP 204 No Content = success (Confluence doesn't return body on delete)
+	// HTTP 200 OK = also success
+	if resp.StatusCode == 204 || resp.StatusCode == 200 {
+		return true, fmt.Sprintf("HTTP %d", resp.StatusCode)
+	}
+
+	// Error case - return response body which contains error details
+	return false, responseStr
+}
+
+// ArchivePage archives a page (safer than delete - can be restored)
+func (s PageService) ArchivePage(baseUrl string, tok string, id string) (bool, string) {
+	log.Printf("Archiving page %s", id)
+	client := myClient()
+	reqUrl := fmt.Sprintf("%s/rest/api/content/archive", baseUrl)
+
+	// Request body: {"pages": [{"id": 123456789}]}
+	type ArchivePage struct {
+		Id int64 `json:"id"`
+	}
+	type ArchiveRequest struct {
+		Pages []ArchivePage `json:"pages"`
+	}
+
+	// Convert string ID to int64
+	var pageId int64
+	fmt.Sscanf(id, "%d", &pageId)
+
+	archiveReq := ArchiveRequest{
+		Pages: []ArchivePage{{Id: pageId}},
+	}
+
+	reqBody, err := json.Marshal(archiveReq)
+	if err != nil {
+		log.Panicln(err)
+	}
+	log.Printf("Archive request body: %s", string(reqBody))
+
+	req, err := http.NewRequest("POST", reqUrl, bytes.NewReader(reqBody))
+	req.Header.Add("Authorization", "Basic "+tok)
+	req.Header.Add("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Panicln(err)
+	}
+	defer resp.Body.Close()
+
+	bts, _ := io.ReadAll(resp.Body)
+	responseStr := string(bts)
+	fmt.Println(responseStr)
+
+	// Check if successful (returns task ID on success)
+	if resp.StatusCode == 200 || resp.StatusCode == 202 {
+		return true, responseStr
+	}
+	return false, responseStr
 }
 
 func (s PageService) ScrollTemplates(url string, tok string, key string) []string {
@@ -456,20 +518,30 @@ func (s PageService) CopyPageDescs(wg *sync.WaitGroup, url string, tok string, p
 	return cntList
 }
 
-func (s PageService) UpdatePage(url string, tok string, pid string, find string, repl string) models.Content {
+func (s PageService) UpdatePage(baseUrl string, tok string, pid string, find string, repl string) models.Content {
 
 	log.Printf("Updating %s page", pid)
 	client := &http.Client{
 		CheckRedirect: redirectPolicyFunc,
 	}
-	reqUrl := fmt.Sprintf("%s/rest/api/content/%s", url, pid)
+	reqUrl := fmt.Sprintf("%s/rest/api/content/%s", baseUrl, pid)
 	log.Println("Request URL = " + reqUrl)
 	log.Println("Edited pageID = " + pid)
 
-	page := s.GetPage(url, tok, pid)
+	page := s.GetPage(baseUrl, tok, pid)
 	pBody := page.Body.Storage.Value
 	fBody := strings.Replace(pBody, find, repl, -1)
-	cntb := models.EditPage{
+
+	// Use a minimal struct for PUT request to avoid sending null nested objects
+	type EditPageMinimal struct {
+		Id      string          `json:"id"`
+		Title   string          `json:"title"`
+		Type    string          `json:"type"`
+		Body    models.Body     `json:"body"`
+		Version models.VersionE `json:"version"`
+	}
+
+	cntb := EditPageMinimal{
 		Id:    page.Id,
 		Title: page.Title,
 		Type:  "page",
@@ -483,6 +555,7 @@ func (s PageService) UpdatePage(url string, tok string, pid string, find string,
 	if err2 != nil {
 		log.Panicln(err2)
 	}
+	log.Printf("Request body: %s", string(pageBytes))
 	req, err := http.NewRequest("PUT", reqUrl, bytes.NewReader(pageBytes))
 	req.Header.Add("Authorization", "Basic "+tok)
 	req.Header.Add("Content-Type", "application/json")
@@ -774,4 +847,86 @@ func myClient() *http.Client {
 	return &http.Client{
 		CheckRedirect: redirectPolicyFunc,
 	}
+}
+
+// SetPageBody sets the entire body of a page (replaces all content)
+// If newTitle is empty, keeps the existing title
+func (s PageService) SetPageBody(baseUrl string, tok string, pid string, newBody string, newTitle string) models.Content {
+	log.Printf("Setting body for page %s", pid)
+	client := myClient()
+	reqUrl := fmt.Sprintf("%s/rest/api/content/%s", baseUrl, pid)
+
+	// Get current page to get version number and title
+	page := s.GetPage(baseUrl, tok, pid)
+
+	title := page.Title
+	if newTitle != "" {
+		title = newTitle
+	}
+
+	// Use a minimal struct for PUT request to avoid sending null nested objects
+	type EditPageMinimal struct {
+		Id      string                 `json:"id"`
+		Title   string                 `json:"title"`
+		Type    string                 `json:"type"`
+		Body    models.Body            `json:"body"`
+		Version models.VersionE        `json:"version"`
+	}
+
+	cntb := EditPageMinimal{
+		Id:    page.Id,
+		Title: title,
+		Type:  "page",
+		Body: models.Body{
+			Storage: models.Storage{
+				Representation: "storage", Value: newBody},
+		},
+		Version: models.VersionE{Number: page.Version.Number + 1},
+	}
+	pageBytes, err2 := json.Marshal(cntb)
+	if err2 != nil {
+		log.Panicln(err2)
+	}
+	log.Printf("Request body: %s", string(pageBytes))
+
+	req, err := http.NewRequest("PUT", reqUrl, bytes.NewReader(pageBytes))
+	req.Header.Add("Authorization", "Basic "+tok)
+	req.Header.Add("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Panicln(err)
+	}
+	defer resp.Body.Close()
+
+	var content models.Content
+	bts, err := io.ReadAll(resp.Body)
+	err = json.Unmarshal(bts, &content)
+	fmt.Println(string(bts))
+
+	return content
+}
+
+// SearchCQL searches Confluence using CQL (Confluence Query Language)
+func (s PageService) SearchCQL(baseUrl string, tok string, cql string, limit int) models.ContentArray {
+	log.Printf("Searching with CQL: %s (limit: %d)", cql, limit)
+	client := myClient()
+
+	// URL encode the CQL query to handle spaces, quotes, and special characters
+	encodedCQL := url.QueryEscape(cql)
+	reqUrl := fmt.Sprintf("%s/rest/api/content/search?cql=%s&limit=%d&expand=space", baseUrl, encodedCQL, limit)
+	log.Println("Search URL: " + reqUrl)
+
+	req, err := http.NewRequest("GET", reqUrl, nil)
+	req.Header.Add("Authorization", "Basic "+tok)
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Panicf("Error performing search request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var results models.ContentArray
+	bts, err := io.ReadAll(resp.Body)
+	err = json.Unmarshal(bts, &results)
+
+	return results
 }

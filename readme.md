@@ -22,13 +22,29 @@ ATLAS_PASS=XXX
 ### Confluence
 
 ```bash
+# Read operations
 atlas --type confluence --action getPage --id "854950177"
 atlas --type confluence --action getPage --space "TEST" --title "Page A"
 atlas --type confluence --action getSpace --space "TEST"
+atlas --type confluence --action listPages --space "TEST"
+
+# Search with CQL (Confluence Query Language)
+atlas --type confluence --action search --cql 'title~"keyword"' --limit 10
+atlas --type confluence --action search --cql 'space="TEST" AND creator=currentUser()' --limit 20
+
+# Create operations
 atlas --type confluence --action createPage --title "pp1" --space "test4" --body "lorem" --parent "858488858"
 atlas --type confluence --action createSpace --name "s1" --category "test"
 atlas --type confluence --action addLabels --id "111" --labels "aa,bb"
 
+# Update operations
+atlas --type confluence --action updatePage --id "123456" --find "old text" --replace "new text"
+atlas --type confluence --action setPageBody --id "123456" --body "<p>New content</p>"
+atlas --type confluence --action setPageBody --id "123456" --body "<p>New content</p>" --title "New Title"
+
+# Delete operations
+atlas --type confluence --action archivePage --id "123456"  # Safer - can be restored
+atlas --type confluence --action deletePage --id "123456"   # Permanent deletion
 ```
 ---
 ### Jira

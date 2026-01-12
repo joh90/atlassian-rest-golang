@@ -162,7 +162,12 @@ func main() {
 			printPage(created)
 		case "addAttach":
 			added := as.AddAttachment(url, anmaToken, pageId, file)
-			log.Println(added)
+			if added.ID != "" {
+				log.Printf("Successfully added attachment '%s' (ID: %s) to page %s", added.Title, added.ID, pageId)
+			} else {
+				log.Printf("Failed to add attachment to page %s", pageId)
+			}
+			log.Println(file)
 		case "downloadAttachments":
 			downloaded := as.DownloadAttachments(url, anmaToken, pageId)
 			log.Println(downloaded)

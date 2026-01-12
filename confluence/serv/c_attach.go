@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 )
 
 type AttachService struct{}
@@ -37,20 +38,33 @@ func (as AttachService) AddAttachment(url string, tok string, pid string, attach
 	reqUrl := fmt.Sprintf("%s/rest/api/content/%s/child/attachment", url, pid)
 
 	file, err := os.Open(attach)
+	if err != nil {
+		log.Printf("Error opening file: %s", err)
+		return models.Attachment{}
+	}
 	defer file.Close()
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-	part, _ := writer.CreateFormFile("multipart/form-data", attach)
+	part, err := writer.CreateFormFile("file", filepath.Base(attach))
+	if err != nil {
+		log.Printf("Error creating form file: %s", err)
+		return models.Attachment{}
+	}
 	bw, err := io.Copy(part, file)
+	if err != nil {
+		log.Printf("Error copying file data: %s", err)
+		return models.Attachment{}
+	}
 	log.Printf("Bytes written: %d", bw)
 
-	if err != nil {
-		log.Printf("Error when copying bytes data from file: %s", err)
-	}
-	defer writer.Close()
+	writer.Close() // Must close before request to finalize multipart body
 
 	req, err := http.NewRequest("POST", reqUrl, body)
+	if err != nil {
+		log.Printf("Error creating request: %s", err)
+		return models.Attachment{}
+	}
 	req.Header.Add("Authorization", "Basic "+tok)
 	req.Header.Add("Content-Type", writer.FormDataContentType())
 	req.Header.Add("X-Atlassian-Token", "nocheck")
@@ -58,15 +72,43 @@ func (as AttachService) AddAttachment(url string, tok string, pid string, attach
 	client := myClient()
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("Error when performing request: %s", err)
+		log.Printf("Error performing request: %s", err)
+		return models.Attachment{}
 	}
 	defer resp.Body.Close()
 
-	var added models.Attachment
 	bts, err := io.ReadAll(resp.Body)
-	err = json.Unmarshal(bts, &added)
+	if err != nil {
+		log.Printf("Error reading response: %s", err)
+		return models.Attachment{}
+	}
 
-	return added
+	// Check HTTP status
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("API error (HTTP %d): %s", resp.StatusCode, string(bts))
+		return models.Attachment{}
+	}
+
+	// API returns {"results": [...]} array
+	var result models.AttachmentsResult
+	err = json.Unmarshal(bts, &result)
+	if err != nil {
+		log.Printf("Error parsing response: %s", err)
+		return models.Attachment{}
+	}
+
+	if len(result.Results) > 0 {
+		r := result.Results[0]
+		return models.Attachment{
+			ID:     r.ID,
+			Type:   r.Type,
+			Status: r.Status,
+			Title:  r.Title,
+		}
+	}
+
+	log.Printf("No attachment in response")
+	return models.Attachment{}
 }
 
 func (as AttachService) DownloadAttachmentById(url string, token string, aid string) models.Attachment {

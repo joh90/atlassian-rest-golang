@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - All commands now output SUCCESS/FAILED/WARNING prefix on first line
 - Structured output with labeled fields (ID, Title, Version, etc.)
+- `updatePage` now shows match count ("Replaced N occurrence(s)") or WARNING if no matches found
 - `GetPage` and `CreateContent` APIs return (content, httpStatus, errorMessage)
 
 ### Fixed

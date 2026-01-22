@@ -216,6 +216,7 @@ type Content struct {
 	Extensions struct {
 		Position int `json:"position"`
 	} `json:"extensions"`
+	Metadata Metadata `json:"metadata"`
 	Expandable struct {
 		ChildTypes          string `json:"childTypes"`
 		Container           string `json:"container"`

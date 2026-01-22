@@ -30,7 +30,7 @@ func TestGetPage(t *testing.T) {
 	//
 	pageService := serv.PageService{}
 	tok := base64.StdEncoding.EncodeToString([]byte("admin:admin"))
-	page := pageService.GetPage(confUrl, tok, "98371")
+	page, _, _ := pageService.GetPage(confUrl, tok, "98371")
 
 	log.Println(page.Body.Storage.Value)
 

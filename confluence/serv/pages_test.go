@@ -19,7 +19,7 @@ func TestGetPage(t *testing.T) {
 	ps := PageService{}
 	tokService := token2.TokenService{}
 	token := tokService.GetToken(user, pass)
-	page := ps.GetPage(confUrl, token, "519308225")
+	page, _, _ := ps.GetPage(confUrl, token, "519308225")
 	log.Println(page)
 }
 

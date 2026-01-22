@@ -33,7 +33,6 @@ func (s SpaceService) GetSpace(url string, tok string, key string) models.Space 
 	var space models.Space
 
 	err = json.Unmarshal(rspb, &space)
-	fmt.Println(string(rspb))
 
 	return space
 

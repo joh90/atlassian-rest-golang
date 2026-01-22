@@ -65,27 +65,45 @@ func (ps PageService) GetPageTitleKey(url string, tok string, space string, titl
 	return content
 }
 
-func (ps PageService) GetPage(url string, tok string, id string) models.Content {
+// GetPage retrieves a page by ID
+// Returns: (content, httpStatus, errorMessage)
+func (ps PageService) GetPage(url string, tok string, id string) (models.Content, int, string) {
 	client := myClient()
-	expand := "expand=space,body.storage,history,version"
+	expand := "expand=space,body.storage,history,version,metadata.labels"
 
 	reqUrl := fmt.Sprintf("%s/rest/api/content/%s?%s", url, id, expand)
 	log.Println("GET REQ URL is " + reqUrl)
 
 	req, err := http.NewRequest("GET", reqUrl, nil)
+	if err != nil {
+		return models.Content{}, 0, fmt.Sprintf("Error creating request: %v", err)
+	}
 
 	req.Header.Add("Authorization", "Basic "+tok)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("Error performing request: %v", err)
+		return models.Content{}, 0, fmt.Sprintf("Error performing request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	bts, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return models.Content{}, resp.StatusCode, fmt.Sprintf("Error reading response: %v", err)
+	}
+
+	// Check HTTP status
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return models.Content{}, resp.StatusCode, string(bts)
 	}
 
 	var content models.Content
-	bts, err := io.ReadAll(resp.Body)
 	err = json.Unmarshal(bts, &content)
+	if err != nil {
+		return models.Content{}, resp.StatusCode, fmt.Sprintf("Error parsing response: %v", err)
+	}
 
-	return content
+	return content, resp.StatusCode, ""
 }
 
 func (s PageService) GetChildren(url string, tok string, id string) models.ContentArray {
@@ -144,8 +162,10 @@ func (s PageService) GetDescendants(url string, tok string, id string, lim int) 
 	return cnArray
 }
 
+// CreateContent creates a new page or content
+// Returns: (content, httpStatus, errorMessage)
 func (ps PageService) CreateContent(url string, tok string, ctype string, key string, parent string,
-	title string, body string) models.Content {
+	title string, body string) (models.Content, int, string) {
 
 	reqUrl := fmt.Sprintf("%s/rest/api/content", url)
 	ancestors := []models.Ancestor{{Id: parent}} // parent
@@ -160,44 +180,42 @@ func (ps PageService) CreateContent(url string, tok string, ctype string, key st
 		},
 		Ancestors: ancestors,
 	}
-	mrsCtn, err2 := json.Marshal(contentBody)
-
-	// debug
-	fmt.Println(">>> Marshalled request body:")
-	fmt.Println(string(mrsCtn))
-
-	if err2 != nil {
-		log.Panicf("Error marshalling the JSON from ContentBody: %v", err2)
+	mrsCtn, err := json.Marshal(contentBody)
+	if err != nil {
+		return models.Content{}, 0, fmt.Sprintf("Error marshalling request: %v", err)
 	}
+
 	req, err := http.NewRequest("POST", reqUrl, bytes.NewReader(mrsCtn))
+	if err != nil {
+		return models.Content{}, 0, fmt.Sprintf("Error creating request: %v", err)
+	}
 
 	req.Header.Add("Authorization", "Basic "+tok)
 	req.Header.Add("Content-Type", "application/json")
 
 	resp, err := myClient().Do(req)
 	if err != nil {
-		log.Panicf("Error performing request: %v", err)
+		return models.Content{}, 0, fmt.Sprintf("Error performing request: %v", err)
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Panicln(err)
-		}
-	}(resp.Body)
-
-	var content models.Content
+	defer resp.Body.Close()
 
 	bts, err := io.ReadAll(resp.Body)
-
-	err = json.Unmarshal(bts, &content)
 	if err != nil {
-		log.Panicf("Error unmarshalling JSON from response: %v", err)
+		return models.Content{}, resp.StatusCode, fmt.Sprintf("Error reading response: %v", err)
 	}
 
-	// debug
-	fmt.Println(string(bts))
+	// Check HTTP status
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return models.Content{}, resp.StatusCode, string(bts)
+	}
 
-	return content
+	var content models.Content
+	err = json.Unmarshal(bts, &content)
+	if err != nil {
+		return models.Content{}, resp.StatusCode, fmt.Sprintf("Error parsing response: %v", err)
+	}
+
+	return content, resp.StatusCode, ""
 }
 
 func (s PageService) CreateContentAsync(wg *sync.WaitGroup, url string, tok string,
@@ -247,13 +265,13 @@ func (s PageService) CreateContentAsync(wg *sync.WaitGroup, url string, tok stri
 }
 
 func (ps PageService) PageContains(url string, tok string, id string, find string) bool {
-	body := ps.GetPage(url, tok, id).Body.Storage.Value
-	return strings.Contains(body, find)
+	page, _, _ := ps.GetPage(url, tok, id)
+	return strings.Contains(page.Body.Storage.Value, find)
 }
 
 func (s PageService) GetSpacePages(url string, tok string, key string) models.ContentArray {
 
-	expand := "expand=body.storage,history,version"
+	expand := "expand=body.storage,history,version,space"
 	reqUrl := fmt.Sprintf("%s/rest/api/content?type=page&spaceKey=%s&%s&limit=300", url, key, expand)
 	req, err := http.NewRequest("GET", reqUrl, nil)
 	req.Header.Add("Authorization", "Basic "+tok)
@@ -428,9 +446,9 @@ func (s PageService) CopyPage(wg *sync.WaitGroup, url string, tok string, pid st
 
 	log.Println("Copying page " + pid)
 
-	orPage := s.GetPage(url, tok, pid)
+	orPage, _, _ := s.GetPage(url, tok, pid)
 	//time.Sleep(time.Duration(sservice.ResponseTime) * time.Millisecond) // sleep till getting target parent
-	parPage := s.GetPage(url, tok, tid)
+	parPage, _, _ := s.GetPage(url, tok, tid)
 
 	/* reqUrl := fmt.Sprintf("%s/rest/api/createdPage", url)
 	ancts := []models.Ancestor{{Id: parent}} // parent
@@ -518,18 +536,31 @@ func (s PageService) CopyPageDescs(wg *sync.WaitGroup, url string, tok string, p
 	return cntList
 }
 
-func (s PageService) UpdatePage(baseUrl string, tok string, pid string, find string, repl string) models.Content {
-
+// UpdatePage performs find/replace on a page
+// Returns: (content, matchCount, originalVersion, httpStatus, errorMessage)
+func (s PageService) UpdatePage(baseUrl string, tok string, pid string, find string, repl string) (models.Content, int, int, int, string) {
 	log.Printf("Updating %s page", pid)
-	client := &http.Client{
-		CheckRedirect: redirectPolicyFunc,
-	}
+	client := myClient()
 	reqUrl := fmt.Sprintf("%s/rest/api/content/%s", baseUrl, pid)
-	log.Println("Request URL = " + reqUrl)
-	log.Println("Edited pageID = " + pid)
 
-	page := s.GetPage(baseUrl, tok, pid)
+	// Get current page
+	page, status, errMsg := s.GetPage(baseUrl, tok, pid)
+	if errMsg != "" {
+		return models.Content{}, 0, 0, status, errMsg
+	}
+
+	originalVersion := page.Version.Number
 	pBody := page.Body.Storage.Value
+
+	// Count matches BEFORE replacing
+	matchCount := strings.Count(pBody, find)
+
+	// If no matches, return early without making API call
+	if matchCount == 0 {
+		return page, 0, originalVersion, 200, ""
+	}
+
+	// Perform replacement
 	fBody := strings.Replace(pBody, find, repl, -1)
 
 	// Use a minimal struct for PUT request to avoid sending null nested objects
@@ -549,28 +580,44 @@ func (s PageService) UpdatePage(baseUrl string, tok string, pid string, find str
 			Storage: models.Storage{
 				Representation: "storage", Value: fBody},
 		},
-		Version: models.VersionE{Number: page.Version.Number + 1},
+		Version: models.VersionE{Number: originalVersion + 1},
 	}
-	pageBytes, err2 := json.Marshal(cntb)
-	if err2 != nil {
-		log.Panicln(err2)
+
+	pageBytes, err := json.Marshal(cntb)
+	if err != nil {
+		return models.Content{}, matchCount, originalVersion, 0, fmt.Sprintf("Error marshalling request: %v", err)
 	}
-	log.Printf("Request body: %s", string(pageBytes))
+
 	req, err := http.NewRequest("PUT", reqUrl, bytes.NewReader(pageBytes))
+	if err != nil {
+		return models.Content{}, matchCount, originalVersion, 0, fmt.Sprintf("Error creating request: %v", err)
+	}
 	req.Header.Add("Authorization", "Basic "+tok)
 	req.Header.Add("Content-Type", "application/json")
+
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Panicln(err)
+		return models.Content{}, matchCount, originalVersion, 0, fmt.Sprintf("Error performing request: %v", err)
 	}
 	defer resp.Body.Close()
+
+	bts, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return models.Content{}, matchCount, originalVersion, resp.StatusCode, fmt.Sprintf("Error reading response: %v", err)
+	}
+
+	// Check HTTP status
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return models.Content{}, matchCount, originalVersion, resp.StatusCode, string(bts)
+	}
+
 	var content models.Content
-	bts, err := ioutil.ReadAll(resp.Body)
 	err = json.Unmarshal(bts, &content)
-	fmt.Println(string(bts))
+	if err != nil {
+		return models.Content{}, matchCount, originalVersion, resp.StatusCode, fmt.Sprintf("Error parsing response: %v", err)
+	}
 
-	return content
-
+	return content, matchCount, originalVersion, resp.StatusCode, ""
 }
 
 func (s PageService) GetPageAttaches(url string, tok string, pid string) models.ContentArray {
@@ -763,40 +810,225 @@ func (ps PageService) GetComment(url string, tok string, cid string) models.Cont
 	return content
 }
 
-func (ps PageService) AddFooterCommentToPage(url string, token string, pageId string, body string) error {
-	log.Printf("Adding comment '%s' to page '%s'", body, pageId)
+// AddFooterCommentToPage adds a comment to a page
+// Returns: (commentId, httpStatus, errorMessage)
+func (ps PageService) AddFooterCommentToPage(url string, token string, pageId string, body string) (string, int, string) {
+	log.Printf("Adding comment to page '%s'", pageId)
 
-	client := &http.Client{
-		CheckRedirect: redirectPolicyFunc,
+	client := myClient()
+	reqUrl := fmt.Sprintf("%s/rest/api/content", url)
+
+	// Build request body as struct for proper JSON escaping
+	type CommentContainer struct {
+		Id   string `json:"id"`
+		Type string `json:"type"`
+	}
+	type CommentBody struct {
+		Type      string           `json:"type"`
+		Status    string           `json:"status"`
+		Container CommentContainer `json:"container"`
+		Body      models.Body      `json:"body"`
 	}
 
-	reqUrl := fmt.Sprintf("%s/rest/api/content", url)
-	reqBody := fmt.Sprintf(`{
-	  "type": "comment",
-	  "status": "current",
-	  "container": {
-		"id": %s,
-		"type": "page"
-	  },
-	  "body": {
-		"storage": {
-		  "value": "%s",
-		  "representation": "storage"
-		}
-	  }
-	}`, pageId, body)
+	commentReq := CommentBody{
+		Type:   "comment",
+		Status: "current",
+		Container: CommentContainer{
+			Id:   pageId,
+			Type: "page",
+		},
+		Body: models.Body{
+			Storage: models.Storage{
+				Representation: "storage",
+				Value:          body,
+			},
+		},
+	}
 
-	req, err := http.NewRequest("POST", reqUrl, bytes.NewReader([]byte(reqBody)))
+	reqBody, err := json.Marshal(commentReq)
+	if err != nil {
+		return "", 0, fmt.Sprintf("Error marshalling request: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", reqUrl, bytes.NewReader(reqBody))
+	if err != nil {
+		return "", 0, fmt.Sprintf("Error creating request: %v", err)
+	}
 
 	req.Header.Add("Authorization", "Basic "+token)
 	req.Header.Add("Content-Type", "application/json")
 
-	_, err = client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
-		log.Panicf("Error performing ADD_COMMENT request: %v", err)
+		return "", 0, fmt.Sprintf("Error performing request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	bts, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", resp.StatusCode, fmt.Sprintf("Error reading response: %v", err)
 	}
 
-	return nil
+	// Check HTTP status
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", resp.StatusCode, string(bts)
+	}
+
+	var content models.Content
+	err = json.Unmarshal(bts, &content)
+	if err != nil {
+		return "", resp.StatusCode, fmt.Sprintf("Error parsing response: %v", err)
+	}
+
+	return content.Id, resp.StatusCode, ""
+}
+
+// ReplyToComment replies to an existing comment
+// Returns: (replyCommentId, httpStatus, errorMessage)
+func (ps PageService) ReplyToComment(url string, token string, parentCommentId string, body string) (string, int, string) {
+	log.Printf("Replying to comment '%s'", parentCommentId)
+
+	client := myClient()
+	reqUrl := fmt.Sprintf("%s/rest/api/content", url)
+
+	// Build request body - container is the parent comment
+	type CommentContainer struct {
+		Id   string `json:"id"`
+		Type string `json:"type"`
+	}
+	type CommentBody struct {
+		Type      string           `json:"type"`
+		Status    string           `json:"status"`
+		Container CommentContainer `json:"container"`
+		Body      models.Body      `json:"body"`
+	}
+
+	commentReq := CommentBody{
+		Type:   "comment",
+		Status: "current",
+		Container: CommentContainer{
+			Id:   parentCommentId,
+			Type: "comment", // Parent is a comment, not a page
+		},
+		Body: models.Body{
+			Storage: models.Storage{
+				Representation: "storage",
+				Value:          body,
+			},
+		},
+	}
+
+	reqBody, err := json.Marshal(commentReq)
+	if err != nil {
+		return "", 0, fmt.Sprintf("Error marshalling request: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", reqUrl, bytes.NewReader(reqBody))
+	if err != nil {
+		return "", 0, fmt.Sprintf("Error creating request: %v", err)
+	}
+
+	req.Header.Add("Authorization", "Basic "+token)
+	req.Header.Add("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", 0, fmt.Sprintf("Error performing request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	bts, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", resp.StatusCode, fmt.Sprintf("Error reading response: %v", err)
+	}
+
+	// Check HTTP status
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", resp.StatusCode, string(bts)
+	}
+
+	var content models.Content
+	err = json.Unmarshal(bts, &content)
+	if err != nil {
+		return "", resp.StatusCode, fmt.Sprintf("Error parsing response: %v", err)
+	}
+
+	return content.Id, resp.StatusCode, ""
+}
+
+// EditComment updates an existing comment's content (full body replacement)
+// Returns: (content, originalVersion, httpStatus, errorMessage)
+func (ps PageService) EditComment(baseUrl string, tok string, commentId string, newBody string) (models.Content, int, int, string) {
+	log.Printf("Editing comment '%s'", commentId)
+
+	client := myClient()
+	reqUrl := fmt.Sprintf("%s/rest/api/content/%s", baseUrl, commentId)
+
+	// Get current comment to get version number
+	comment := ps.GetComment(baseUrl, tok, commentId)
+	if comment.Id == "" {
+		return models.Content{}, 0, 404, "Comment not found"
+	}
+
+	originalVersion := comment.Version.Number
+
+	// Use a minimal struct for PUT request
+	type EditCommentMinimal struct {
+		Id      string          `json:"id"`
+		Type    string          `json:"type"`
+		Status  string          `json:"status"`
+		Body    models.Body     `json:"body"`
+		Version models.VersionE `json:"version"`
+	}
+
+	editReq := EditCommentMinimal{
+		Id:     comment.Id,
+		Type:   "comment",
+		Status: "current",
+		Body: models.Body{
+			Storage: models.Storage{
+				Representation: "storage",
+				Value:          newBody,
+			},
+		},
+		Version: models.VersionE{Number: originalVersion + 1},
+	}
+
+	reqBody, err := json.Marshal(editReq)
+	if err != nil {
+		return models.Content{}, originalVersion, 0, fmt.Sprintf("Error marshalling request: %v", err)
+	}
+
+	req, err := http.NewRequest("PUT", reqUrl, bytes.NewReader(reqBody))
+	if err != nil {
+		return models.Content{}, originalVersion, 0, fmt.Sprintf("Error creating request: %v", err)
+	}
+	req.Header.Add("Authorization", "Basic "+tok)
+	req.Header.Add("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return models.Content{}, originalVersion, 0, fmt.Sprintf("Error performing request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	bts, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return models.Content{}, originalVersion, resp.StatusCode, fmt.Sprintf("Error reading response: %v", err)
+	}
+
+	// Check HTTP status
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return models.Content{}, originalVersion, resp.StatusCode, string(bts)
+	}
+
+	var content models.Content
+	err = json.Unmarshal(bts, &content)
+	if err != nil {
+		return models.Content{}, originalVersion, resp.StatusCode, fmt.Sprintf("Error parsing response: %v", err)
+	}
+
+	return content, originalVersion, resp.StatusCode, ""
 }
 
 func (p PageService) AddComment(url string, tok string, cid string, pid string) models.Content {
@@ -806,7 +1038,7 @@ func (p PageService) AddComment(url string, tok string, cid string, pid string) 
 	}
 
 	cmm := p.GetComment(url, tok, cid)
-	page := p.GetPage(url, tok, pid)
+	page, _, _ := p.GetPage(url, tok, pid)
 
 	reqUrl := fmt.Sprintf("%s/rest/api/content", url)
 	cntb := models.CreateComment{
@@ -851,14 +1083,19 @@ func myClient() *http.Client {
 
 // SetPageBody sets the entire body of a page (replaces all content)
 // If newTitle is empty, keeps the existing title
-func (s PageService) SetPageBody(baseUrl string, tok string, pid string, newBody string, newTitle string) models.Content {
+// Returns: (content, originalVersion, httpStatus, errorMessage)
+func (s PageService) SetPageBody(baseUrl string, tok string, pid string, newBody string, newTitle string) (models.Content, int, int, string) {
 	log.Printf("Setting body for page %s", pid)
 	client := myClient()
 	reqUrl := fmt.Sprintf("%s/rest/api/content/%s", baseUrl, pid)
 
 	// Get current page to get version number and title
-	page := s.GetPage(baseUrl, tok, pid)
+	page, status, errMsg := s.GetPage(baseUrl, tok, pid)
+	if errMsg != "" {
+		return models.Content{}, 0, status, errMsg
+	}
 
+	originalVersion := page.Version.Number
 	title := page.Title
 	if newTitle != "" {
 		title = newTitle
@@ -866,11 +1103,11 @@ func (s PageService) SetPageBody(baseUrl string, tok string, pid string, newBody
 
 	// Use a minimal struct for PUT request to avoid sending null nested objects
 	type EditPageMinimal struct {
-		Id      string                 `json:"id"`
-		Title   string                 `json:"title"`
-		Type    string                 `json:"type"`
-		Body    models.Body            `json:"body"`
-		Version models.VersionE        `json:"version"`
+		Id      string          `json:"id"`
+		Title   string          `json:"title"`
+		Type    string          `json:"type"`
+		Body    models.Body     `json:"body"`
+		Version models.VersionE `json:"version"`
 	}
 
 	cntb := EditPageMinimal{
@@ -881,29 +1118,44 @@ func (s PageService) SetPageBody(baseUrl string, tok string, pid string, newBody
 			Storage: models.Storage{
 				Representation: "storage", Value: newBody},
 		},
-		Version: models.VersionE{Number: page.Version.Number + 1},
+		Version: models.VersionE{Number: originalVersion + 1},
 	}
-	pageBytes, err2 := json.Marshal(cntb)
-	if err2 != nil {
-		log.Panicln(err2)
+
+	pageBytes, err := json.Marshal(cntb)
+	if err != nil {
+		return models.Content{}, originalVersion, 0, fmt.Sprintf("Error marshalling request: %v", err)
 	}
-	log.Printf("Request body: %s", string(pageBytes))
 
 	req, err := http.NewRequest("PUT", reqUrl, bytes.NewReader(pageBytes))
+	if err != nil {
+		return models.Content{}, originalVersion, 0, fmt.Sprintf("Error creating request: %v", err)
+	}
 	req.Header.Add("Authorization", "Basic "+tok)
 	req.Header.Add("Content-Type", "application/json")
+
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Panicln(err)
+		return models.Content{}, originalVersion, 0, fmt.Sprintf("Error performing request: %v", err)
 	}
 	defer resp.Body.Close()
 
-	var content models.Content
 	bts, err := io.ReadAll(resp.Body)
-	err = json.Unmarshal(bts, &content)
-	fmt.Println(string(bts))
+	if err != nil {
+		return models.Content{}, originalVersion, resp.StatusCode, fmt.Sprintf("Error reading response: %v", err)
+	}
 
-	return content
+	// Check HTTP status
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return models.Content{}, originalVersion, resp.StatusCode, string(bts)
+	}
+
+	var content models.Content
+	err = json.Unmarshal(bts, &content)
+	if err != nil {
+		return models.Content{}, originalVersion, resp.StatusCode, fmt.Sprintf("Error parsing response: %v", err)
+	}
+
+	return content, originalVersion, resp.StatusCode, ""
 }
 
 // SearchCQL searches Confluence using CQL (Confluence Query Language)

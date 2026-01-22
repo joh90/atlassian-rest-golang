@@ -142,12 +142,25 @@ func (as AttachService) DownloadAttachments(url string, token string, pid string
 		response, err := client.Get(dLink)
 		if err != nil {
 			log.Printf("Error when getting attachment via GET HTTP request. Err: %s", err)
+			continue
 		}
-		//defer response.Body.Close()
-		var attach models.Attachment
 		bts, err := io.ReadAll(response.Body)
-		err = os.WriteFile(att.Title, bts, 0644)
-		downloaded = append(downloaded, attach)
+		response.Body.Close()
+		if err != nil {
+			log.Printf("Error reading attachment data: %s", err)
+			continue
+		}
+		// Sanitize filename to prevent path traversal attacks
+		safeName := filepath.Base(att.Title)
+		err = os.WriteFile(safeName, bts, 0644)
+		if err != nil {
+			log.Printf("Error writing file %s: %s", safeName, err)
+			continue
+		}
+		downloaded = append(downloaded, models.Attachment{
+			ID:    att.ID,
+			Title: safeName,
+		})
 	}
 
 	return downloaded

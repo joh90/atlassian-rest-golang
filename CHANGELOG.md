@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.11] - 2026-02-11
+
+### Added
+- `searchUsers`: Search for users with CQL (returns account IDs for @ mentions)
+
 ## [0.0.10] - 2026-01-22
 
 ### Added

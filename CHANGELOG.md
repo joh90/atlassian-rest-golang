@@ -2,10 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.0.11] - 2026-02-11
+## [0.0.11] - 2026-02-12
 
 ### Added
-- `searchUsers`: Search for users with CQL (returns account IDs for @ mentions)
+- `searchUsers`: Search for users with CQL (by Jiachao)
+  - Single-line pipe-separated output: Account ID | Name | Email | Type
+  - AccountType field to distinguish users from apps
+
+### Changed
+- `EMail` → `Email` in User model (JSON tag unchanged, no API impact)
+- Error handling: CLI-exposed service functions now return
+  (result, httpStatus, errorMessage) instead of panicking or failing silently
+  - SearchCQL (search, listPages)
+  - GetSpacePages (listPages)
+  - GetPageTitleKey (getPage by title)
+  - GetSpace (getSpace, @home resolution)
+  - AddLabels (addLabel, createPage --labels)
+  - AddAttachment (addAttach)
+  - DownloadAttachments (downloadAttachments)
+- `@home` resolution prints clear error instead of passing empty
+  parent ID (was: cryptic "ContentId string must not be null")
+- `downloadAttachments` with bad page ID now returns FAILED
+  instead of misleading "SUCCESS: Downloaded 0"
+
+### Fixed
+- `getPage` by title: URL-encode title parameter (was: titles with spaces
+  caused HTTP request to hang)
+- `getPage` by title: parse API response as ContentArray instead of single
+  Content (was: always returned "Page not found")
 
 ## [0.0.10] - 2026-01-22
 

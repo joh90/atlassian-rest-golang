@@ -148,7 +148,11 @@ func main() {
 		us := serv.UserService{}
 		// find space's home page
 		if parent == "@home" {
-			space := ss.GetSpace(url, anmaToken, spaceKey)
+			space, _, homeErr := ss.GetSpace(url, anmaToken, spaceKey)
+			if homeErr != "" {
+				fmt.Printf("FAILED: Could not resolve @home for space '%s' - %s\n", spaceKey, homeErr)
+				return
+			}
 			parent = space.Homepage.Id
 		}
 		switch action {
@@ -175,8 +179,10 @@ func main() {
 					fmt.Println(page.Body.Storage.Value)
 				}
 			} else {
-				page := pageService.GetPageTitleKey(url, anmaToken, spaceKey, pageTitle)
-				if page.Id != "" {
+				page, status, errMsg := pageService.GetPageTitleKey(url, anmaToken, spaceKey, pageTitle)
+				if errMsg != "" {
+					fmt.Printf("FAILED: HTTP %d - %s\n", status, errMsg)
+				} else if page.Id != "" {
 					fmt.Println("SUCCESS: Retrieved page")
 					fmt.Printf("  ID: %s\n", page.Id)
 					fmt.Printf("  Title: %s\n", page.Title)
@@ -191,8 +197,10 @@ func main() {
 				fmt.Println("FAILED: --space is required for getSpace")
 				return
 			}
-			space := ss.GetSpace(url, anmaToken, spaceKey)
-			if space.Key != "" {
+			space, status, errMsg := ss.GetSpace(url, anmaToken, spaceKey)
+			if errMsg != "" {
+				fmt.Printf("FAILED: HTTP %d - %s\n", status, errMsg)
+			} else if space.Key != "" {
 				fmt.Println("SUCCESS: Retrieved space")
 				fmt.Printf("  Key: %s\n", space.Key)
 				fmt.Printf("  Name: %s\n", space.Name)
@@ -216,8 +224,12 @@ func main() {
 				fmt.Printf("  Space: %s\n", spaceKey)
 				fmt.Printf("  Version: %d\n", created.Version.Number)
 				if labels != "" {
-					ls.AddLabels(url, anmaToken, created.Id, strings.Split(labels, ","))
-					fmt.Printf("  Labels: %s\n", labels)
+					_, _, labelErr := ls.AddLabels(url, anmaToken, created.Id, strings.Split(labels, ","))
+					if labelErr != "" {
+						fmt.Printf("  Labels: FAILED - %s\n", labelErr)
+					} else {
+						fmt.Printf("  Labels: %s\n", labels)
+					}
 				}
 				if verbose {
 					// Re-fetch to show actual stored content
@@ -237,8 +249,10 @@ func main() {
 				fmt.Println("FAILED: --file is required for addAttach")
 				return
 			}
-			added := as.AddAttachment(url, anmaToken, pageId, file)
-			if added.ID != "" {
+			added, status, errMsg := as.AddAttachment(url, anmaToken, pageId, file)
+			if errMsg != "" {
+				fmt.Printf("FAILED: HTTP %d - %s\n", status, errMsg)
+			} else if added.ID != "" {
 				fmt.Println("SUCCESS: Added attachment")
 				fmt.Printf("  Attachment ID: %s\n", added.ID)
 				fmt.Printf("  Title: %s\n", added.Title)
@@ -251,20 +265,28 @@ func main() {
 				fmt.Println("FAILED: --id is required for downloadAttachments")
 				return
 			}
-			downloaded := as.DownloadAttachments(url, anmaToken, pageId)
-			fmt.Printf("SUCCESS: Downloaded %d attachment(s) to ./\n", len(downloaded))
-			for i, att := range downloaded {
-				fmt.Printf("  [%d] %s\n", i+1, att.Title)
+			downloaded, status, errMsg := as.DownloadAttachments(url, anmaToken, pageId)
+			if errMsg != "" {
+				fmt.Printf("FAILED: HTTP %d - %s\n", status, errMsg)
+			} else {
+				fmt.Printf("SUCCESS: Downloaded %d attachment(s) to ./\n", len(downloaded))
+				for i, att := range downloaded {
+					fmt.Printf("  [%d] %s\n", i+1, att.Title)
+				}
 			}
 		case "addLabel":
 			page, status, errMsg := pageService.GetPage(url, anmaToken, pageId)
 			if errMsg != "" {
 				fmt.Printf("FAILED: HTTP %d - %s\n", status, errMsg)
 			} else if labels != "" {
-				ls.AddLabels(url, anmaToken, page.Id, strings.Split(labels, ","))
-				fmt.Println("SUCCESS: Added labels")
-				fmt.Printf("  ID: %s\n", page.Id)
-				fmt.Printf("  Labels: %s\n", labels)
+				_, labelStatus, labelErr := ls.AddLabels(url, anmaToken, page.Id, strings.Split(labels, ","))
+				if labelErr != "" {
+					fmt.Printf("FAILED: HTTP %d - %s\n", labelStatus, labelErr)
+				} else {
+					fmt.Println("SUCCESS: Added labels")
+					fmt.Printf("  ID: %s\n", page.Id)
+					fmt.Printf("  Labels: %s\n", labels)
+				}
 			} else {
 				fmt.Println("FAILED: No labels specified")
 			}
@@ -348,8 +370,12 @@ func main() {
 				fmt.Println("FAILED: --cql is required for search")
 				return
 			}
-			results := pageService.SearchCQL(url, anmaToken, cql, limit)
-			printSearchResults(results, limit)
+			results, status, errMsg := pageService.SearchCQL(url, anmaToken, cql, limit)
+			if errMsg != "" {
+				fmt.Printf("FAILED: HTTP %d - %s\n", status, errMsg)
+			} else {
+				printSearchResults(results, limit)
+			}
 		case "searchUsers":
 			// Search for users using CQL
 			if cql == "" {
@@ -362,12 +388,14 @@ func main() {
 			} else {
 				fmt.Printf("SUCCESS: Found %d user(s)\n", len(users))
 				for i, user := range users {
-					fmt.Printf("  [%d] Account ID: %s\n", i+1, user.AccountId)
-					fmt.Printf("      Name: %s\n", user.DisplayName)
-					if user.EMail != "" {
-						fmt.Printf("      Email: %s\n", user.EMail)
+					line := fmt.Sprintf("  [%d] Account ID: %s | Name: %s", i+1, user.AccountId, user.DisplayName)
+					if user.Email != "" {
+						line += fmt.Sprintf(" | Email: %s", user.Email)
 					}
-					fmt.Println()
+					if user.AccountType != "" {
+						line += fmt.Sprintf(" | Type: %s", user.AccountType)
+					}
+					fmt.Println(line)
 				}
 			}
 		case "listPages":
@@ -376,8 +404,12 @@ func main() {
 				fmt.Println("FAILED: --space is required for listPages")
 				return
 			}
-			pages := pageService.GetSpacePages(url, anmaToken, spaceKey)
-			printSearchResults(pages, 0)
+			pages, status, errMsg := pageService.GetSpacePages(url, anmaToken, spaceKey)
+			if errMsg != "" {
+				fmt.Printf("FAILED: HTTP %d - %s\n", status, errMsg)
+			} else {
+				printSearchResults(pages, 0)
+			}
 		case "deletePage":
 			// Delete a page (permanent - use archivePage instead if possible)
 			if pageId == "" {

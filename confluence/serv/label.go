@@ -32,34 +32,53 @@ func (l LabelService) GetPageLabels(url string, tok string, pid string) models.L
 	return lArr
 }
 
-func (l LabelService) AddLabels(url string, tok string, pid string, labels []string) models.LabelArray {
+// AddLabels adds labels to a page
+// Returns: (labels, httpStatus, errorMessage)
+func (l LabelService) AddLabels(url string, tok string, pid string, labels []string) (models.LabelArray, int, string) {
 	log.Println("Adding labels to " + pid)
 
 	lbls := make([]models.CreateLabel, 0)
-
 	for _, l := range labels {
 		lbObj := models.CreateLabel{Prefix: "global", Name: l}
 		lbls = append(lbls, lbObj)
 	}
-	reqUrl := fmt.Sprintf("%s/rest/api/content/%s/label", url, pid)
 
+	reqUrl := fmt.Sprintf("%s/rest/api/content/%s/label", url, pid)
 	lJson, err := json.Marshal(lbls)
+	if err != nil {
+		return models.LabelArray{}, 0, fmt.Sprintf("Error marshalling request: %v", err)
+	}
+
 	req, err := http.NewRequest("POST", reqUrl, bytes.NewReader(lJson))
+	if err != nil {
+		return models.LabelArray{}, 0, fmt.Sprintf("Error creating request: %v", err)
+	}
 	req.Header.Add("Authorization", "Basic "+tok)
 	req.Header.Add("Content-Type", "application/json")
+
 	client := myClient()
 	resp, err := client.Do(req)
-
 	if err != nil {
-		log.Panicln(err)
+		return models.LabelArray{}, 0, fmt.Sprintf("Error performing request: %v", err)
 	}
 	defer resp.Body.Close()
+
+	bts, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return models.LabelArray{}, resp.StatusCode, fmt.Sprintf("Error reading response: %v", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return models.LabelArray{}, resp.StatusCode, string(bts)
+	}
+
 	var label models.LabelArray
-	bts, err := ioutil.ReadAll(resp.Body)
 	err = json.Unmarshal(bts, &label)
+	if err != nil {
+		return models.LabelArray{}, resp.StatusCode, fmt.Sprintf("Error parsing response: %v", err)
+	}
 
-	return label
-
+	return label, resp.StatusCode, ""
 }
 
 //func (l LabelService) CopyLabels(url string, tok string, pid string, tgt string) models.LabelArray {

@@ -12,7 +12,7 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
-	"net/url"
+	neturl "net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -44,25 +44,47 @@ func redirectPolicyFunc(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-func (ps PageService) GetPageTitleKey(url string, tok string, space string, title string) models.Content {
+// GetPageTitleKey retrieves a page by space key and title
+// Returns: (content, httpStatus, errorMessage)
+func (ps PageService) GetPageTitleKey(url string, tok string, space string, title string) (models.Content, int, string) {
 	client := myClient()
 	expand := "expand=space,body.storage,history,version"
 
-	reqUrl := fmt.Sprintf("%s/rest/api/content?spaceKey=%s&title=%s&%s", url, space, title, expand)
+	encodedTitle := neturl.QueryEscape(title)
+	reqUrl := fmt.Sprintf("%s/rest/api/content?spaceKey=%s&title=%s&%s", url, space, encodedTitle, expand)
 	log.Println("GET REQ URL is " + reqUrl)
 
 	req, err := http.NewRequest("GET", reqUrl, nil)
+	if err != nil {
+		return models.Content{}, 0, fmt.Sprintf("Error creating request: %v", err)
+	}
 	req.Header.Add("Authorization", "Basic "+tok)
+
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("Error performing request: %v", err)
+		return models.Content{}, 0, fmt.Sprintf("Error performing request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	bts, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return models.Content{}, resp.StatusCode, fmt.Sprintf("Error reading response: %v", err)
 	}
 
-	var content models.Content
-	bts, err := io.ReadAll(resp.Body)
-	err = json.Unmarshal(bts, &content)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return models.Content{}, resp.StatusCode, string(bts)
+	}
 
-	return content
+	var results models.ContentArray
+	err = json.Unmarshal(bts, &results)
+	if err != nil {
+		return models.Content{}, resp.StatusCode, fmt.Sprintf("Error parsing response: %v", err)
+	}
+
+	if len(results.Results) > 0 {
+		return results.Results[0], resp.StatusCode, ""
+	}
+	return models.Content{}, resp.StatusCode, ""
 }
 
 // GetPage retrieves a page by ID
@@ -269,24 +291,41 @@ func (ps PageService) PageContains(url string, tok string, id string, find strin
 	return strings.Contains(page.Body.Storage.Value, find)
 }
 
-func (s PageService) GetSpacePages(url string, tok string, key string) models.ContentArray {
-
+// GetSpacePages lists all pages in a space
+// Returns: (results, httpStatus, errorMessage)
+func (s PageService) GetSpacePages(url string, tok string, key string) (models.ContentArray, int, string) {
 	expand := "expand=body.storage,history,version,space"
 	reqUrl := fmt.Sprintf("%s/rest/api/content?type=page&spaceKey=%s&%s&limit=300", url, key, expand)
+
 	req, err := http.NewRequest("GET", reqUrl, nil)
+	if err != nil {
+		return models.ContentArray{}, 0, fmt.Sprintf("Error creating request: %v", err)
+	}
 	req.Header.Add("Authorization", "Basic "+tok)
+
 	client := myClient()
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Panicln(err)
+		return models.ContentArray{}, 0, fmt.Sprintf("Error performing request: %v", err)
 	}
 	defer resp.Body.Close()
+
+	bts, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return models.ContentArray{}, resp.StatusCode, fmt.Sprintf("Error reading response: %v", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return models.ContentArray{}, resp.StatusCode, string(bts)
+	}
+
 	var cnArray models.ContentArray
-	bts, err := ioutil.ReadAll(resp.Body)
 	err = json.Unmarshal(bts, &cnArray)
+	if err != nil {
+		return models.ContentArray{}, resp.StatusCode, fmt.Sprintf("Error parsing response: %v", err)
+	}
 
-	return cnArray
-
+	return cnArray, resp.StatusCode, ""
 }
 func (ps PageService) GetSpacePagesByLabel(url string, tok string, key string, lb string) models.ContentArray { // todo
 	//?cql=space+%3D+"DEV"+and+label+%3D+"aa"
@@ -1159,26 +1198,42 @@ func (s PageService) SetPageBody(baseUrl string, tok string, pid string, newBody
 }
 
 // SearchCQL searches Confluence using CQL (Confluence Query Language)
-func (s PageService) SearchCQL(baseUrl string, tok string, cql string, limit int) models.ContentArray {
+// Returns: (results, httpStatus, errorMessage)
+func (s PageService) SearchCQL(baseUrl string, tok string, cql string, limit int) (models.ContentArray, int, string) {
 	log.Printf("Searching with CQL: %s (limit: %d)", cql, limit)
 	client := myClient()
 
 	// URL encode the CQL query to handle spaces, quotes, and special characters
-	encodedCQL := url.QueryEscape(cql)
+	encodedCQL := neturl.QueryEscape(cql)
 	reqUrl := fmt.Sprintf("%s/rest/api/content/search?cql=%s&limit=%d&expand=space", baseUrl, encodedCQL, limit)
 	log.Println("Search URL: " + reqUrl)
 
 	req, err := http.NewRequest("GET", reqUrl, nil)
+	if err != nil {
+		return models.ContentArray{}, 0, fmt.Sprintf("Error creating request: %v", err)
+	}
 	req.Header.Add("Authorization", "Basic "+tok)
+
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Panicf("Error performing search request: %v", err)
+		return models.ContentArray{}, 0, fmt.Sprintf("Error performing request: %v", err)
 	}
 	defer resp.Body.Close()
 
-	var results models.ContentArray
 	bts, err := io.ReadAll(resp.Body)
-	err = json.Unmarshal(bts, &results)
+	if err != nil {
+		return models.ContentArray{}, resp.StatusCode, fmt.Sprintf("Error reading response: %v", err)
+	}
 
-	return results
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return models.ContentArray{}, resp.StatusCode, string(bts)
+	}
+
+	var results models.ContentArray
+	err = json.Unmarshal(bts, &results)
+	if err != nil {
+		return models.ContentArray{}, resp.StatusCode, fmt.Sprintf("Error parsing response: %v", err)
+	}
+
+	return results, resp.StatusCode, ""
 }

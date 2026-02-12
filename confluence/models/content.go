@@ -28,7 +28,7 @@ type User struct {
 	UserKey        string      `json:"userKey"`
 	AccountId      string      `json:"accountId"`
 	AccountType    string      `json:"accountType"`
-	EMail          string      `json:"email"`
+	Email          string      `json:"email"`
 	PublicName     string      `json:"publicName"`
 	DisplayName    string      `json:"displayName"`
 	ProfilePicture Icon        `json:"profilePicture"`

@@ -33,14 +33,15 @@ func (as AttachService) GetPageAttachments(url string, tok string, pid string) m
 	return attachments
 }
 
-func (as AttachService) AddAttachment(url string, tok string, pid string, attach string) models.Attachment {
+// AddAttachment uploads an attachment to a page
+// Returns: (attachment, httpStatus, errorMessage)
+func (as AttachService) AddAttachment(url string, tok string, pid string, attach string) (models.Attachment, int, string) {
 	log.Printf("Adding attachment %s to page %s ", attach, pid)
 	reqUrl := fmt.Sprintf("%s/rest/api/content/%s/child/attachment", url, pid)
 
 	file, err := os.Open(attach)
 	if err != nil {
-		log.Printf("Error opening file: %s", err)
-		return models.Attachment{}
+		return models.Attachment{}, 0, fmt.Sprintf("Error opening file: %v", err)
 	}
 	defer file.Close()
 
@@ -48,13 +49,11 @@ func (as AttachService) AddAttachment(url string, tok string, pid string, attach
 	writer := multipart.NewWriter(body)
 	part, err := writer.CreateFormFile("file", filepath.Base(attach))
 	if err != nil {
-		log.Printf("Error creating form file: %s", err)
-		return models.Attachment{}
+		return models.Attachment{}, 0, fmt.Sprintf("Error creating form file: %v", err)
 	}
 	bw, err := io.Copy(part, file)
 	if err != nil {
-		log.Printf("Error copying file data: %s", err)
-		return models.Attachment{}
+		return models.Attachment{}, 0, fmt.Sprintf("Error copying file data: %v", err)
 	}
 	log.Printf("Bytes written: %d", bw)
 
@@ -62,8 +61,7 @@ func (as AttachService) AddAttachment(url string, tok string, pid string, attach
 
 	req, err := http.NewRequest("POST", reqUrl, body)
 	if err != nil {
-		log.Printf("Error creating request: %s", err)
-		return models.Attachment{}
+		return models.Attachment{}, 0, fmt.Sprintf("Error creating request: %v", err)
 	}
 	req.Header.Add("Authorization", "Basic "+tok)
 	req.Header.Add("Content-Type", writer.FormDataContentType())
@@ -72,29 +70,24 @@ func (as AttachService) AddAttachment(url string, tok string, pid string, attach
 	client := myClient()
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("Error performing request: %s", err)
-		return models.Attachment{}
+		return models.Attachment{}, 0, fmt.Sprintf("Error performing request: %v", err)
 	}
 	defer resp.Body.Close()
 
 	bts, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("Error reading response: %s", err)
-		return models.Attachment{}
+		return models.Attachment{}, resp.StatusCode, fmt.Sprintf("Error reading response: %v", err)
 	}
 
-	// Check HTTP status
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		log.Printf("API error (HTTP %d): %s", resp.StatusCode, string(bts))
-		return models.Attachment{}
+		return models.Attachment{}, resp.StatusCode, string(bts)
 	}
 
 	// API returns {"results": [...]} array
 	var result models.AttachmentsResult
 	err = json.Unmarshal(bts, &result)
 	if err != nil {
-		log.Printf("Error parsing response: %s", err)
-		return models.Attachment{}
+		return models.Attachment{}, resp.StatusCode, fmt.Sprintf("Error parsing response: %v", err)
 	}
 
 	if len(result.Results) > 0 {
@@ -104,11 +97,10 @@ func (as AttachService) AddAttachment(url string, tok string, pid string, attach
 			Type:   r.Type,
 			Status: r.Status,
 			Title:  r.Title,
-		}
+		}, resp.StatusCode, ""
 	}
 
-	log.Printf("No attachment in response")
-	return models.Attachment{}
+	return models.Attachment{}, resp.StatusCode, "No attachment in response"
 }
 
 func (as AttachService) DownloadAttachmentById(url string, token string, aid string) models.Attachment {
@@ -116,24 +108,40 @@ func (as AttachService) DownloadAttachmentById(url string, token string, aid str
 	return models.Attachment{}
 }
 
-func (as AttachService) DownloadAttachments(url string, token string, pid string) []models.Attachment {
+// DownloadAttachments downloads all attachments from a page
+// Returns: (attachments, httpStatus, errorMessage)
+func (as AttachService) DownloadAttachments(url string, token string, pid string) ([]models.Attachment, int, string) {
 	log.Printf("Downloading page '%s' attachments", pid)
 	reqUrl := fmt.Sprintf("%s/rest/api/content/%s/child/attachment", url, pid)
 
 	req, err := http.NewRequest(http.MethodGet, reqUrl, nil)
+	if err != nil {
+		return nil, 0, fmt.Sprintf("Error creating request: %v", err)
+	}
 	req.Header.Add("Authorization", fmt.Sprintf("Basic %s", token))
 	req.Header.Add("Accept", "application/json")
 
 	client := myClient()
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("Error when performing GET request: %s", err)
+		return nil, 0, fmt.Sprintf("Error performing request: %v", err)
 	}
 	defer resp.Body.Close()
 
-	var attaches models.AttachmentsResult
 	bts, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Sprintf("Error reading response: %v", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, resp.StatusCode, string(bts)
+	}
+
+	var attaches models.AttachmentsResult
 	err = json.Unmarshal(bts, &attaches)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Sprintf("Error parsing response: %v", err)
+	}
 
 	downloaded := make([]models.Attachment, 0)
 
@@ -163,5 +171,5 @@ func (as AttachService) DownloadAttachments(url string, token string, pid string
 		})
 	}
 
-	return downloaded
+	return downloaded, resp.StatusCode, ""
 }

@@ -145,6 +145,7 @@ func main() {
 		ss := serv.SpaceService{}
 		ls := serv.LabelService{}
 		as := serv.AttachService{}
+		us := serv.UserService{}
 		// find space's home page
 		if parent == "@home" {
 			space := ss.GetSpace(url, anmaToken, spaceKey)
@@ -349,6 +350,26 @@ func main() {
 			}
 			results := pageService.SearchCQL(url, anmaToken, cql, limit)
 			printSearchResults(results, limit)
+		case "searchUsers":
+			// Search for users using CQL
+			if cql == "" {
+				fmt.Println("FAILED: --cql is required for searchUsers")
+				return
+			}
+			users, status, errMsg := us.SearchUsers(url, anmaToken, cql, limit)
+			if errMsg != "" {
+				fmt.Printf("FAILED: HTTP %d - %s\n", status, errMsg)
+			} else {
+				fmt.Printf("SUCCESS: Found %d user(s)\n", len(users))
+				for i, user := range users {
+					fmt.Printf("  [%d] Account ID: %s\n", i+1, user.AccountId)
+					fmt.Printf("      Name: %s\n", user.DisplayName)
+					if user.EMail != "" {
+						fmt.Printf("      Email: %s\n", user.EMail)
+					}
+					fmt.Println()
+				}
+			}
 		case "listPages":
 			// List all pages in a space
 			if spaceKey == "" {
